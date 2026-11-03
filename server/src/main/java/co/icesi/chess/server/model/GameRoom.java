@@ -1,4 +1,5 @@
 package co.icesi.chess.server.model;
+
 import co.icesi.chess.model.ChessRules;
 import co.icesi.chess.model.TierManager;
 
@@ -66,7 +67,6 @@ public class GameRoom {
             role = PlayerRole.ROLEBLACK;
             assignedColor = PieceColor.COLORBLACK;
         } else {
-            // Ya hay dos jugadores: ingresa como espectador
             spectators.add(nick);
             role = PlayerRole.ROLESPECTATOR;
             assignedColor = PieceColor.COLORNONE;
@@ -81,18 +81,24 @@ public class GameRoom {
 
     public void registerObserver(String nickname, ChessObserverPrx observer) {
         if (observer != null && nickname != null) {
-            observers.put(nickname.trim(), observer);
-            // Enviar inmediatamente estado actual
-            try {
-                observer.onGameStateChanged(getGameStateSnapshot());
-            } catch (Exception ignored) {
-            }
+            String key = nickname.trim();
+            observers.put(key, observer);
+            System.out.println("[GameRoom BiDir] Observador registrado para " + key + " en sala " + roomCode);
+
+            notificationExecutor.submit(() -> {
+                try {
+                    observer.onGameStateChanged(getGameStateSnapshot());
+                } catch (Exception e) {
+                    System.err.println("[GameRoom BiDir Warning] Error enviando estado inicial a " + key + ": " + e.getMessage());
+                }
+            });
         }
     }
 
     public void unregisterObserver(String nickname) {
         if (nickname != null) {
             observers.remove(nickname.trim());
+            System.out.println("[GameRoom BiDir] Observador removido: " + nickname);
         }
     }
 
@@ -107,7 +113,6 @@ public class GameRoom {
             throw new InvalidMoveException("La partida no está en curso (Estado: " + status + ").");
         }
 
-        // 1. Validar turno del jugador
         if (currentTurn == PieceColor.COLORWHITE) {
             if (whitePlayer == null || !whitePlayer.equalsIgnoreCase(nickname)) {
                 throw new NotPlayerTurnException("Es el turno de las piezas Blancas (" + whitePlayer + ").");
@@ -120,7 +125,6 @@ public class GameRoom {
             throw new NotPlayerTurnException("No es el turno de ningún jugador.");
         }
 
-        // 2. Validar casilla de origen
         if (!ChessRules.isInside(from.row, from.col)) {
             throw new InvalidMoveException("Posición de origen fuera del tablero.");
         }
@@ -129,14 +133,12 @@ public class GameRoom {
             throw new InvalidMoveException("No hay una pieza propia en la casilla seleccionada.");
         }
 
-        // 3. Validar movimiento legal
         List<Position> legalMoves = ChessRules.getLegalMoves(board, from);
         boolean isLegal = legalMoves.stream().anyMatch(p -> p.row == to.row && p.col == to.col);
         if (!isLegal) {
             throw new InvalidMoveException("Movimiento inválido para " + piece.type + " según las reglas.");
         }
 
-        // 4. Captura si existe pieza en destino
         ChessPiece targetPiece = board[to.row][to.col];
         boolean isCapture = !ChessRules.isEmpty(targetPiece);
         if (isCapture) {
@@ -147,10 +149,8 @@ public class GameRoom {
             }
         }
 
-        // 5. Ejecutar movimiento en el tablero
         board = ChessRules.simulateMove(board, from, to);
 
-        // 6. Evaluar situación del oponente
         PieceColor opponent = ChessRules.opponentColor(currentTurn);
         boolean isOpponentInCheck = ChessRules.isKingInCheck(board, opponent);
         boolean hasOpponentMoves = ChessRules.hasAnyLegalMove(board, opponent);
@@ -161,7 +161,6 @@ public class GameRoom {
 
         if (!hasOpponentMoves) {
             if (isOpponentInCheck) {
-                // Jaque Mate
                 isCheckmate = true;
                 if (currentTurn == PieceColor.COLORWHITE) {
                     status = GameStatus.CHECKMATEWHITEWINS;
@@ -172,7 +171,6 @@ public class GameRoom {
                 }
                 tierManager.recordGameResult(whitePlayer, blackPlayer, false, winner);
             } else {
-                // Tablas por ahogado
                 status = GameStatus.STALEMATE;
                 tierManager.recordGameResult(whitePlayer, blackPlayer, true, null);
                 pointsDelta = TierManager.POINTS_DRAW;
@@ -185,7 +183,6 @@ public class GameRoom {
             }
         }
 
-        // 7. Registrar notación del movimiento
         String notation = ChessRules.formatMoveNotation(piece, from, to, isCapture, isOpponentInCheck, isCheckmate);
         moves.add(new MoveRecord(
                 notation,
@@ -196,7 +193,6 @@ public class GameRoom {
                 System.currentTimeMillis()
         ));
 
-        // 8. Cambiar turno si la partida sigue activa
         if (status == GameStatus.INPROGRESS || status == GameStatus.CHECKWHITE || status == GameStatus.CHECKBLACK) {
             currentTurn = opponent;
         }
@@ -292,25 +288,37 @@ public class GameRoom {
     }
 
     private void dispatchStateNotification(GameState state) {
-        for (Map.Entry<String, ChessObserverPrx> entry : observers.entrySet()) {
+        Map<String, ChessObserverPrx> targets = new HashMap<>(observers);
+
+        for (Map.Entry<String, ChessObserverPrx> entry : targets.entrySet()) {
+            String nick = entry.getKey();
+            ChessObserverPrx obsPrx = entry.getValue();
+
             notificationExecutor.submit(() -> {
                 try {
-                    entry.getValue().onGameStateChanged(state);
+                    obsPrx.onGameStateChanged(state);
+                } catch (com.zeroc.Ice.ConnectionLostException | com.zeroc.Ice.ObjectNotExistException e) {
+                    System.err.println("[GameRoom BiDir] Conexión totalmente perdida para " + nick + ". Removiendo.");
+                    observers.remove(nick);
                 } catch (Exception e) {
-                    // Si el observador no responde, se desconectó
-                    observers.remove(entry.getKey());
+                    System.err.println("[GameRoom BiDir Warning] Excepción temporal al notificar a " + nick + ": " + e.getMessage());
                 }
             });
         }
     }
 
     private void dispatchGameFinishedNotification(GameState state, String winner, int pointsDelta) {
-        for (Map.Entry<String, ChessObserverPrx> entry : observers.entrySet()) {
+        Map<String, ChessObserverPrx> targets = new HashMap<>(observers);
+
+        for (Map.Entry<String, ChessObserverPrx> entry : targets.entrySet()) {
+            String nick = entry.getKey();
+            ChessObserverPrx obsPrx = entry.getValue();
+
             notificationExecutor.submit(() -> {
                 try {
-                    entry.getValue().onGameFinished(state, winner != null ? winner : "", pointsDelta);
+                    obsPrx.onGameFinished(state, winner != null ? winner : "", pointsDelta);
                 } catch (Exception e) {
-                    observers.remove(entry.getKey());
+                    observers.remove(nick);
                 }
             });
         }

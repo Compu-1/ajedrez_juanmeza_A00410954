@@ -1,89 +1,88 @@
 import { getPieceGlyph } from "../services/chessRulesHelper.js";
 
 /**
- * Componente del Tablero de Ajedrez 8x8 manipulando directamente el DOM.
+ * Componente Tablero de Ajedrez 8x8 (RF-CB-01 a RF-CB-04).
  */
 export class ChessBoard {
-    constructor(onTileClicked) {
-        this.onTileClicked = onTileClicked;
-        this.element = document.createElement("div");
-        this.boardGrid = document.createElement("div");
-        this.tiles = [];
+    constructor(onSquareClick) {
+        this.onSquareClick = onSquareClick;
 
-        this.build();
+        this.wrapper = document.createElement("div");
+        this.wrapper.className = "board-wrapper";
+
+        this.element = document.createElement("div");
+        this.element.id = "chess-board";
+        this.element.className = "chessboard";
+
+        this.wrapper.appendChild(this.element);
     }
 
-    build() {
-        this.element.className = "board-wrapper";
-        this.boardGrid.id = "chessboard";
-        this.boardGrid.className = "chessboard";
+    render(gameState, selectedSquare = null, legalMoves = []) {
+        // RF-CB-01: Validación
+        if (!gameState) return;
+        const board = gameState.board !== undefined ? gameState.board : gameState._board;
+        if (!board) return;
+
+        this.element.replaceChildren();
+
+        // RF-CB-02: Última jugada (origen y destino)
+        const moves = gameState.moves || gameState._moves || [];
+        const lastMove = moves.length > 0 ? moves[moves.length - 1] : null;
+        const lastFrom = lastMove ? (lastMove.fromPos || lastMove._fromPos) : null;
+        const lastTo = lastMove ? (lastMove.toPos || lastMove._toPos) : null;
 
         for (let r = 0; r < 8; r++) {
-            const rowTiles = [];
             for (let c = 0; c < 8; c++) {
                 const tile = document.createElement("div");
-                const isLight = (r + c) % 2 === 0;
-                tile.className = `tile ${isLight ? "light" : "dark"}`;
-                tile.dataset.row = String(r);
-                tile.dataset.col = String(c);
+                tile.className = `tile ${(r + c) % 2 === 0 ? "light" : "dark"}`;
+                tile.dataset.row = r;
+                tile.dataset.col = c;
+
+                // RF-CB-02: Resaltado de última jugada y selección
+                if ((lastFrom && lastFrom.row === r && lastFrom.col === c) ||
+                    (lastTo && lastTo.row === r && lastTo.col === c)) {
+                    tile.classList.add("last-move");
+                }
+                if (selectedSquare && selectedSquare.row === r && selectedSquare.col === c) {
+                    tile.classList.add("selected");
+                }
+
+                const piece = board[r] ? board[r][c] : null;
+                const hasPiece = this.isActivePiece(piece);
+
+                // RF-CB-04: Sugerencias de movimiento
+                if (legalMoves && legalMoves.some(m => m.row === r && m.col === c)) {
+                    const indicator = document.createElement("div");
+                    indicator.className = hasPiece ? "capture-ring" : "move-dot";
+                    tile.appendChild(indicator);
+                }
+
+                // RF-CB-03: Dibujo de piezas
+                if (hasPiece) {
+                    const pieceSpan = document.createElement("span");
+                    pieceSpan.className = this.colorName(piece) === "COLORWHITE" ? "piece-white" : "piece-black";
+                    pieceSpan.textContent = getPieceGlyph(piece);
+                    tile.appendChild(pieceSpan);
+                }
 
                 tile.addEventListener("click", () => {
-                    if (this.onTileClicked) {
-                        this.onTileClicked(r, c);
-                    }
+                    if (this.onSquareClick) this.onSquareClick(r, c);
                 });
 
-                this.boardGrid.appendChild(tile);
-                rowTiles.push(tile);
+                this.element.appendChild(tile);
             }
-            this.tiles.push(rowTiles);
         }
-
-        this.element.appendChild(this.boardGrid);
     }
 
-    /**
-     * Renderiza el estado completo del tablero de ajedrez en las casillas del DOM.
-     * 
-     * ESPECIFICACIÓN DE REQUERIMIENTOS:
-     * 
-     * Parámetros:
-     * - gameState: Objeto de estado remoto de ZeroC Ice (tipo GameState de Slice).
-     *   * gameState.board: Matriz de 8x8 con instancias de ChessPiece (piece.type, piece.color).
-     *   * gameState.moves: Arreglo de jugadas MoveHistoryItem[] (para identificar la última jugada).
-     * - selectedSquare: Objeto { row, col } de la casilla actualmente seleccionada por el usuario (o null).
-     * - legalMoves: Arreglo de objetos { row, col } con los destinos legales calculados (o arreglo vacío).
-     * 
-     * Requerimientos Funcionales:
-     * 1. Validación Previa:
-     *    - Si gameState o gameState.board no existen, abortar la ejecución inmediatamente sin errores.
-     * 
-     * 2. Identificación de la Última Jugada:
-     *    - Si gameState.moves contiene elementos, extraer las coordenadas origen (lastFrom)
-     *      y destino (lastTo) del último elemento del arreglo.
-     * 
-     * 3. Actualización de las 64 Casillas (recorrer r de 0 a 7, y c de 0 a 7):
-     *    - Obtener el elemento DOM de la casilla en this.tiles[r][c] y la pieza en gameState.board[r][c].
-     *    - Restablecer la clase base: "tile light" o "tile dark" según ((r + c) % 2 === 0).
-     *    - Limpiar los nodos hijos previos de la casilla (tile.replaceChildren()).
-     *    - Resaltar última jugada: Si (r, c) coincide con lastFrom o con lastTo, agregar la clase CSS 'last-move'.
-     *    - Resaltar casilla seleccionada: Si (r, c) coincide con selectedSquare, agregar la clase CSS 'selected'.
-     *    - Dibujar pieza: Si en la casilla hay una pieza distinta a PIECEEMPTY (piece.type._name !== "PIECEEMPTY"):
-     *      * Crear un elemento 'span' con clase 'piece-white' si piece.color._name === "COLORWHITE",
-     *        o clase 'piece-black' en caso contrario.
-     *      * Asignar como textContent el glifo devuelto por getPieceGlyph(piece).
-     *      * Insertar el 'span' dentro de la casilla.
-     *    - Indicadores de movimiento sugerido:
-     *      * Si la posición (r, c) está incluida dentro de legalMoves:
-     *        - Si la casilla ya contiene una pieza, crear un elemento 'div' con clase 'capture-ring'.
-     *        - Si la casilla está vacía, crear un elemento 'div' con clase 'move-dot'.
-     *        - Insertar el indicador dentro de la casilla.
-     */
-    render(gameState, selectedSquare, legalMoves = []) {
-        // TODO: Implementar el renderizado del tablero según la especificación de requerimientos de arriba.
+    isActivePiece(piece) {
+        return !!(piece && piece.type && piece.type._name !== "PIECEEMPTY");
+    }
+
+    colorName(piece) {
+        return piece && piece.color ? (piece.color._name || piece.color.name || "") : "";
     }
 
     getElement() {
-        return this.element;
+        return this.wrapper;
     }
 }

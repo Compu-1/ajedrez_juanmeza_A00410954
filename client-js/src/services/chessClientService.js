@@ -1,71 +1,102 @@
-// TODO (Paso 1 y Paso 4.1): Importar el runtime de ZeroC Ice ("../../lib/Ice.min.js"),
-// el contrato generado por slice2js ("./ChessService.js") y la clase ChessRealtimeObserver.
-
-/**
- * Servicio de comunicación RPC con ZeroC Ice sobre WebSockets.
- * Encapsula el ciclo de vida del Communicator, el proxy de ChessService
- * y la suscripción en tiempo real mediante ChessRealtimeObserver.
- */
+import { chessRealtimeObserver } from "./chessRealtimeObserver.js";
 
 export class ChessClientService {
-    constructor() {
-        // TODO (Paso 4.1): Inicializar las referencias a window.Ice, window.ChessApp y el estado
-        // interno del servicio (communicator, service, realtimeObserver, isConnected, nickname,
-        // currentRoomCode, role, assignedColor).
-    }
+  constructor() {
+    this.communicator = null;
+    this.servicePrx = null;
+    this.currentRoomCode = null;
+    this.currentNickname = null;
+  }
 
-    validateRuntime() {
-        // TODO (Paso 4.1): Verificar que window.Ice y window.ChessApp estén disponibles;
-        // en caso contrario lanzar un Error descriptivo.
-    }
+  async connect(host = "127.0.0.1", port = 10002) {
+    const initData = new Ice.InitializationData();
+    initData.properties = Ice.createProperties();
+    initData.properties.setProperty("Ice.MessageSizeMax", "2048");
+    initData.properties.setProperty("Ice.ACM.Client.Timeout", "0");
+    initData.properties.setProperty("Ice.ACM.Client.Heartbeat", "3");
 
-    async connect(host, port, nickname) {
-        // TODO (Paso 4.2):
-        // 1. Validar el runtime y destruir cualquier communicator previo.
-        // 2. Crear Ice.InitializationData(), configurar Ice.MessageSizeMax = "2048",
-        //    Ice.ACM.Client.Timeout = "0" e Ice.ACM.Client.Heartbeat = "3".
-        // 3. Inicializar this.communicator = this.Ice.initialize(initData).
-        // 4. Construir el proxy WebSocket `ChessService:ws -h ${targetHost} -p ${targetPort}`
-        //    y obtener this.service mediante await this.ChessApp.ChessServicePrx.checkedCast(base).
-        // 5. Instanciar this.realtimeObserver = new ChessRealtimeObserver(this.Ice, this.ChessApp)
-        //    y marcar this.isConnected = true.
-    }
+    this.communicator = Ice.initialize(initData);
+    const proxyStr = `ChessService:ws -h ${host} -p ${port}`;
+    const basePrx = this.communicator.stringToProxy(proxyStr);
 
-    async getLobbyData() {
-        // TODO (Paso 4.3): Consultar concurrentemente getActiveRooms() y getLeaderboard()
-        // en el servidor y retornar { rooms, leaderboard }.
+    this.servicePrx = await window.ChessApp.ChessServicePrx.checkedCast(basePrx);
+    if (!this.servicePrx) {
+      throw new Error("Proxy de ChessService no válido.");
     }
+    return this.servicePrx;
+  }
 
-    async createRoom(nickname) {
-        // TODO (Paso 4.3): Invocar remotamente createRoom(this.nickname) y retornar el código generado.
-    }
+  async getLobbyData() {
+    const [rooms, leaderboard] = await Promise.all([
+      this.servicePrx.getActiveRooms(),
+      this.servicePrx.getLeaderboard()
+    ]);
+    return { rooms, leaderboard };
+  }
 
-    async joinRoom(roomCode, nickname) {
-        // TODO (Paso 4.3): Normalizar el código de sala en mayúsculas, invocar
-        // joinRoom(normalizedCode, this.nickname), actualizar this.currentRoomCode,
-        // this.role y this.assignedColor, y retornar el JoinRoomResult.
-    }
+  async createRoom(nickname) {
+    this.currentNickname = nickname ? nickname.trim() : "";
+    return await this.servicePrx.createRoom(this.currentNickname);
+  }
 
-    async subscribeToRoom(listeners = {}) {
-        // TODO (Paso 4.4): Delegar la suscripción en tiempo real a
-        // await this.realtimeObserver.subscribe(this.communicator, this.service, this.currentRoomCode, this.nickname, listeners).
-    }
+  async joinRoom(roomCode, nickname) {
+    this.currentRoomCode = roomCode ? roomCode.trim() : "";
+    this.currentNickname = nickname ? nickname.trim() : "";
 
-    async makeMove(fromRow, fromCol, toRow, toCol) {
-        // TODO (Paso 4.4): Instanciar dos objetos this.ChessApp.Position(row, col)
-        // e invocar await this.service.makeMove(this.currentRoomCode, this.nickname, fromPos, toPos).
-    }
+    const res = await this.servicePrx.joinRoom(this.currentRoomCode, this.currentNickname);
+    return {
+      role: res.role !== undefined ? res.role : res._role,
+      assignedColor: res.assignedColor !== undefined ? res.assignedColor : res._assignedColor,
+      state: res.state !== undefined ? res.state : res._state
+    };
+  }
 
-    async resign() {
-        // TODO (Paso 4.4): Invocar await this.service.resign(this.currentRoomCode, this.nickname).
+  async subscribeToRoom(callbacks) {
+    if (!this.communicator || !this.servicePrx || !this.currentRoomCode || !this.currentNickname) {
+      return;
     }
+    await chessRealtimeObserver.subscribe(
+      this.communicator,
+      this.servicePrx,
+      this.currentRoomCode,
+      this.currentNickname,
+      callbacks
+    );
+  }
 
-    async leaveRoom() {
-        // TODO (Paso 4.4): Desuscribir this.realtimeObserver, invocar
-        // await this.service.leaveRoom(this.currentRoomCode, this.nickname) y limpiar el estado de sala actual.
+  async makeMove(fromRow, fromCol, toRow, toCol) {
+    if (!this.currentRoomCode || !this.currentNickname) {
+      throw new Error("No hay una sesión activa de jugador en la sala.");
     }
+    const fromPos = new window.ChessApp.Position(fromRow, fromCol);
+    const toPos = new window.ChessApp.Position(toRow, toCol);
+    return await this.servicePrx.makeMove(
+      this.currentRoomCode,
+      this.currentNickname,
+      fromPos,
+      toPos
+    );
+  }
 
-    ensureConnected() {
-        // TODO: Verificar que el cliente esté conectado antes de realizar llamadas RPC.
+  async resign() {
+    await this.servicePrx.resign(this.currentRoomCode, this.currentNickname);
+  }
+
+  async leaveRoom() {
+    if (this.currentRoomCode && this.currentNickname) {
+      try {
+        await chessRealtimeObserver.unsubscribe(
+          this.servicePrx,
+          this.currentRoomCode,
+          this.currentNickname
+        );
+        await this.servicePrx.leaveRoom(this.currentRoomCode, this.currentNickname);
+      } catch (e) {
+        console.warn("Error al abandonar la sala:", e);
+      }
     }
+    this.currentRoomCode = null;
+  }
 }
+
+export const chessClientService = new ChessClientService();

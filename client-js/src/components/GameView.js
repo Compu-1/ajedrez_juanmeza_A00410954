@@ -3,9 +3,6 @@ import { PlayerCard } from "./PlayerCard.js";
 import { MoveHistory } from "./MoveHistory.js";
 import { calculateLocalCandidateMoves } from "../services/chessRulesHelper.js";
 
-/**
- * Componente de Vista de Partida (Barra superior, Tablero 8x8, Tarjetas de Jugadores e Historial).
- */
 export class GameView {
     constructor(handlers = {}) {
         this.handlers = handlers;
@@ -155,7 +152,7 @@ export class GameView {
     }
 
     updateRoleBadge() {
-        const roleName = this.myRole ? this.myRole._name : "ROLESPECTATOR";
+        const roleName = this.extractEnumName(this.myRole, "ROLESPECTATOR");
         if (roleName === "ROLEWHITE") {
             this.roleBadge.className = "role-badge white";
             this.roleBadge.textContent = "TÚ: BLANCAS";
@@ -175,33 +172,56 @@ export class GameView {
         if (!gameState) return;
         this.gameState = gameState;
 
+        // Limpiar selección previa al llegar un estado nuevo
+        this.selectedSquare = null;
+        this.legalMoves = [];
+
+        const whiteNick = gameState.whitePlayerNickname || gameState.whitePlayer || gameState._whitePlayer || "-";
+        const blackNick = gameState.blackPlayerNickname || gameState.blackPlayer || gameState._blackPlayer || "Esperando rival...";
+
+        const whitePts = gameState.whitePoints !== undefined ? gameState.whitePoints : (gameState._whitePoints || 1200);
+        const blackPts = gameState.blackPoints !== undefined ? gameState.blackPoints : (gameState._blackPoints || 1200);
+
+        const whiteCap = gameState.whiteCapturedPieces || gameState.whiteCaptured || gameState._whiteCaptured || [];
+        const blackCap = gameState.blackCapturedPieces || gameState.blackCaptured || gameState._blackCaptured || [];
+
+        const specCount = gameState.spectatorCount !== undefined ? gameState.spectatorCount : (gameState._spectatorCount || 0);
+        const movesList = gameState.moves || gameState._moves || [];
+
+        // 1. Banner superior
         this.updateTurnBanner(gameState);
 
-        this.whitePlayerCard.update(
-            gameState.whitePlayerNickname || "-",
-            gameState.whitePoints,
-            gameState.whiteCapturedPieces
-        );
+        // 2. Tarjetas de Jugadores
+        if (this.whitePlayerCard) this.whitePlayerCard.update(whiteNick, whitePts, whiteCap);
+        if (this.blackPlayerCard) this.blackPlayerCard.update(blackNick, blackPts, blackCap);
 
-        this.blackPlayerCard.update(
-            gameState.blackPlayerNickname || "Esperando rival...",
-            gameState.blackPoints,
-            gameState.blackCapturedPieces
-        );
+        // 3. Historial y espectadores
+        if (this.spectatorsCountEl) this.spectatorsCountEl.textContent = `Espectadores en vivo: ${specCount}`;
+        if (this.moveHistory) {
+            if (typeof this.moveHistory.update === "function") this.moveHistory.update(movesList);
+            else if (typeof this.moveHistory.render === "function") this.moveHistory.render(movesList);
+        }
 
-        this.spectatorsCountEl.textContent = `Espectadores en vivo: ${gameState.spectatorCount}`;
-        this.moveHistory.update(gameState.moves);
-        this.chessBoard.render(gameState, this.selectedSquare, this.legalMoves);
+        // 4. Renderizar el nuevo tablero de ajedrez
+        if (this.chessBoard) {
+            this.chessBoard.render(this.gameState, null, []);
+        }
 
-        const roleName = this.myRole ? this.myRole._name : "ROLESPECTATOR";
-        const sName = gameState.status ? gameState.status._name : "";
+        const roleName = this.extractEnumName(this.myRole, "ROLESPECTATOR");
+        const sName = this.extractEnumName(gameState.status || gameState._status, "");
         const isActive = sName === "INPROGRESS" || sName === "CHECKWHITE" || sName === "CHECKBLACK";
-        this.resignBtn.disabled = (roleName === "ROLESPECTATOR") || !isActive;
+
+        if (this.resignBtn) {
+            this.resignBtn.disabled = (roleName === "ROLESPECTATOR") || !isActive;
+        }
     }
 
     updateTurnBanner(gameState) {
-        const sName = gameState.status ? gameState.status._name : "INPROGRESS";
-        const tColor = gameState.currentTurn ? gameState.currentTurn._name : "COLORWHITE";
+        const sName = this.extractEnumName(gameState.status || gameState._status, "INPROGRESS");
+        const tColor = this.extractEnumName(gameState.currentTurn || gameState._currentTurn, "COLORWHITE");
+
+        const whiteNick = gameState.whitePlayerNickname || gameState._whitePlayerNickname || "";
+        const blackNick = gameState.blackPlayerNickname || gameState._blackPlayerNickname || "";
 
         switch (sName) {
             case "WAITINGFORPLAYERS":
@@ -211,32 +231,32 @@ export class GameView {
                 break;
             case "INPROGRESS":
                 if (tColor === "COLORWHITE") {
-                    this.statusBanner.textContent = `Turno de BLANCAS (${gameState.whitePlayerNickname})`;
+                    this.statusBanner.textContent = `Turno de BLANCAS (${whiteNick || 'Blancas'})`;
                     this.statusBanner.className = "turn-indicator turn-white";
                     this.statusBanner.style.color = "#FFFFFF";
                 } else {
-                    this.statusBanner.textContent = `Turno de NEGRAS (${gameState.blackPlayerNickname})`;
+                    this.statusBanner.textContent = `Turno de NEGRAS (${blackNick || 'Negras'})`;
                     this.statusBanner.className = "turn-indicator turn-black";
                     this.statusBanner.style.color = "#90CAF9";
                 }
                 break;
             case "CHECKWHITE":
-                this.statusBanner.textContent = `¡JAQUE A BLANCAS! (${gameState.whitePlayerNickname})`;
+                this.statusBanner.textContent = `¡JAQUE A BLANCAS! (${whiteNick})`;
                 this.statusBanner.className = "turn-indicator turn-check";
                 this.statusBanner.style.color = "var(--accent-red)";
                 break;
             case "CHECKBLACK":
-                this.statusBanner.textContent = `¡JAQUE A NEGRAS! (${gameState.blackPlayerNickname})`;
+                this.statusBanner.textContent = `¡JAQUE A NEGRAS! (${blackNick})`;
                 this.statusBanner.className = "turn-indicator turn-check";
                 this.statusBanner.style.color = "var(--accent-red)";
                 break;
             case "CHECKMATEWHITEWINS":
-                this.statusBanner.textContent = `¡JAQUE MATE! GANAN LAS BLANCAS (${gameState.whitePlayerNickname})`;
+                this.statusBanner.textContent = `¡JAQUE MATE! GANAN LAS BLANCAS (${whiteNick})`;
                 this.statusBanner.className = "turn-indicator turn-mate";
                 this.statusBanner.style.color = "#69F0AE";
                 break;
             case "CHECKMATEBLACKWINS":
-                this.statusBanner.textContent = `¡JAQUE MATE! GANAN LAS NEGRAS (${gameState.blackPlayerNickname})`;
+                this.statusBanner.textContent = `¡JAQUE MATE! GANAN LAS NEGRAS (${blackNick})`;
                 this.statusBanner.className = "turn-indicator turn-mate";
                 this.statusBanner.style.color = "#69F0AE";
                 break;
@@ -262,19 +282,23 @@ export class GameView {
     }
 
     async handleTileClick(row, col) {
-        const isSpectator = this.myRole && this.myRole._name === "ROLESPECTATOR";
-        if (isSpectator || !this.gameState) return;
+        const roleName = this.extractEnumName(this.myRole, "ROLESPECTATOR");
+        if (roleName === "ROLESPECTATOR" || !this.gameState) return;
 
-        const currentTurnColor = this.gameState.currentTurn ? this.gameState.currentTurn._name : "";
-        const myColorName = this.myColor ? this.myColor._name : "";
-        if (currentTurnColor !== myColorName) {
+        const currentTurnColor = this.extractEnumName(this.gameState.currentTurn || this.gameState._currentTurn, "");
+        const myColorName = this.extractEnumName(this.myColor, "");
+
+        const effectiveMyColor = myColorName || (roleName === "ROLEWHITE" ? "COLORWHITE" : (roleName === "ROLEBLACK" ? "COLORBLACK" : ""));
+
+        if (currentTurnColor && effectiveMyColor && currentTurnColor !== effectiveMyColor) {
             return;
         }
 
-        const clickedPiece = this.gameState.board[row][col];
-        const isOwnPiece = clickedPiece && clickedPiece.color && clickedPiece.color._name === myColorName;
+        const board = this.gameState.board || this.gameState._board;
+        const clickedPiece = board[row] ? board[row][col] : null;
+        const pieceColorName = clickedPiece ? this.extractEnumName(clickedPiece.color || clickedPiece._color, "") : "";
+        const isOwnPiece = clickedPiece && pieceColorName === effectiveMyColor;
 
-        // 1. Si hay una pieza seleccionada y se hace clic en un destino legal -> Ejecutar movimiento
         if (this.selectedSquare) {
             const isLegalMove = this.legalMoves.some(m => m.row === row && m.col === col);
             if (isLegalMove) {
@@ -290,18 +314,28 @@ export class GameView {
             }
         }
 
-        // 2. Si se hace clic sobre una pieza propia -> Seleccionar y mostrar movimientos candidatos
         if (isOwnPiece) {
             this.selectedSquare = { row, col };
-            this.legalMoves = calculateLocalCandidateMoves(this.gameState.board, row, col, myColorName);
+            this.legalMoves = calculateLocalCandidateMoves(board, row, col, effectiveMyColor);
             this.chessBoard.render(this.gameState, this.selectedSquare, this.legalMoves);
             return;
         }
 
-        // 3. Clic en otra casilla -> Limpiar selección
         this.selectedSquare = null;
         this.legalMoves = [];
         this.chessBoard.render(this.gameState, null, []);
+    }
+
+    extractEnumName(obj, defaultVal = "") {
+        if (!obj) return defaultVal;
+        if (typeof obj === "string") return obj;
+        if (obj._name) return obj._name;
+        if (obj.name) return obj.name;
+        if (typeof obj.value !== "undefined") {
+            if (obj.value === 0) return "COLORWHITE";
+            if (obj.value === 1) return "COLORBLACK";
+        }
+        return String(obj);
     }
 
     show() {

@@ -1,16 +1,12 @@
-import { ChessClientService } from "./services/chessClientService.js";
+import { chessClientService } from "./services/chessClientService.js";
 import { Header } from "./components/Header.js";
 import { LobbyView } from "./components/LobbyView.js";
 import { GameView } from "./components/GameView.js";
 
-/**
- * Punto de entrada y controlador principal de la aplicación en JavaScript Vainilla componetizado.
- * Monta dinámicamente el árbol de componentes sobre el único nodo #root del DOM.
- */
 class ChessApplication {
     constructor(rootElement) {
         this.rootElement = rootElement;
-        this.clientService = new ChessClientService();
+        this.clientService = chessClientService;
 
         this.header = new Header();
         this.lobbyView = new LobbyView({
@@ -49,10 +45,7 @@ class ChessApplication {
             console.error("Error conectando con ZeroC Ice:", err);
             this.header.setConnected(false);
             this.lobbyView.setConnectionState(false);
-            alert(
-                `No fue posible conectar con el servidor Ice en ws://${host}:${port}\n\n` +
-                `Verifica que el servidor esté activo con el endpoint WebSocket (10002).`
-            );
+            alert(`No fue posible conectar con el servidor Ice en ws://${host}:${port}`);
         }
     }
 
@@ -82,7 +75,9 @@ class ChessApplication {
         }
 
         try {
+            console.log(`[CLIENT-JS] Uniéndose a sala ${roomCode} con nickname ${nickname}...`);
             const result = await this.clientService.joinRoom(roomCode, nickname);
+
             this.lobbyView.hide();
             this.gameView.initSession(
                 this.clientService.currentRoomCode,
@@ -92,11 +87,13 @@ class ChessApplication {
             );
             this.gameView.show();
 
-            // Suscribir observador en tiempo real por WebSocket bidireccional
+            // 1. Forzar primera actualización gráfica inmediata con el estado devuelto
+            this.gameView.updateState(result.state);
+
+            // 2. Suscribir explícitamente el observador en tiempo real por WebSockets BiDir
+            console.log("[CLIENT-JS] Iniciando registro de Observador BiDir...");
             await this.clientService.subscribeToRoom({
-                onStateChanged: (newState) => {
-                    this.gameView.updateState(newState);
-                },
+                onStateChanged: (newState) => this.handleGameStateChanged(newState),
                 onGameFinished: (_finalState, winnerNickname, pointsDelta) => {
                     const msg = (!winnerNickname || winnerNickname.trim() === "")
                         ? "La partida ha concluido en tablas (+5 pts para ambos)."
@@ -105,7 +102,15 @@ class ChessApplication {
                 }
             });
         } catch (err) {
+            console.error("[CLIENT-JS] Error en handleJoinRoom:", err);
             alert(`No fue posible unirse a la sala ${roomCode.trim().toUpperCase()}:\n${err.reason || err.message}`);
+        }
+    }
+
+    handleGameStateChanged(newState) {
+        console.log("-> [App JS] Re-renderizando pantalla por evento Push:", newState);
+        if (this.gameView && typeof this.gameView.updateState === "function") {
+            this.gameView.updateState(newState);
         }
     }
 
